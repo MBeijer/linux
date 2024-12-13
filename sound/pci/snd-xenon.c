@@ -137,7 +137,7 @@ static irqreturn_t snd_xenon_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void snd_xenon_timer_fn(struct timer_list t)
+static void snd_xenon_timer_fn(struct timer_list* t)
 {
 	struct snd_xenon *chip = from_timer(chip,t,timer);
 	u32 reg;
@@ -474,8 +474,8 @@ static void snd_xenon_init(struct snd_xenon *chip)
 
 	spin_lock_irqsave(&chip->lock, flags);
 
-	chip->descr_base_virt = pci_alloc_consistent(chip->pci,
-			 DESCRIPTOR_BUFFER_SIZE * 2, &chip->descr_base_phys);
+	chip->descr_base_virt = dma_alloc_coherent(&chip->pci->dev,
+			 DESCRIPTOR_BUFFER_SIZE * 2, &chip->descr_base_phys, GFP_ATOMIC);
 	chip->descr_base_phys &= 0x1fffffff;
 	printk("snd_xenon: descr_base_virt=0x%llx, descr_base_phys=0x%llx\n",
 		(unsigned long long)chip->descr_base_virt,
@@ -605,7 +605,7 @@ static int snd_xenon_free(struct snd_xenon *chip)
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
 	if (chip->descr_base_virt)
-		pci_free_consistent(chip->pci, DESCRIPTOR_BUFFER_SIZE * 2, chip->descr_base_virt, chip->descr_base_phys);
+		dma_free_coherent(&chip->pci->dev, DESCRIPTOR_BUFFER_SIZE * 2, chip->descr_base_virt, chip->descr_base_phys);
 	if (chip->iobase_virt)
 		  iounmap(chip->iobase_virt);
 	pci_release_regions(chip->pci);
