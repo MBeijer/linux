@@ -8,8 +8,10 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/ftrace.h>
+#include <linux/kprobes.h>
 #include <linux/sched/clock.h>
 #include <linux/sched/mm.h>
+#include <linux/idr.h>
 
 #include "trace_output.h"
 
@@ -19,8 +21,6 @@
 DECLARE_RWSEM(trace_event_sem);
 
 static struct hlist_head event_hash[EVENT_HASHSIZE] __read_mostly;
-
-static int next_event_type = __TRACE_LAST_TYPE;
 
 enum print_line_t trace_print_bputs_msg_only(struct trace_iterator *iter)
 {
@@ -322,8 +322,9 @@ void trace_event_printf(struct trace_iterator *iter, const char *fmt, ...)
 }
 EXPORT_SYMBOL(trace_event_printf);
 
-static int trace_output_raw(struct trace_iterator *iter, char *name,
-			    char *fmt, va_list ap)
+static __printf(3, 0)
+int trace_output_raw(struct trace_iterator *iter, char *name,
+		     char *fmt, va_list ap)
 {
 	struct trace_seq *s = &iter->seq;
 
@@ -346,22 +347,12 @@ int trace_output_call(struct trace_iterator *iter, char *name, char *fmt, ...)
 }
 EXPORT_SYMBOL_GPL(trace_output_call);
 
-#ifdef CONFIG_KRETPROBES
-static inline const char *kretprobed(const char *name)
+static inline const char *kretprobed(const char *name, unsigned long addr)
 {
-	static const char tramp_name[] = "kretprobe_trampoline";
-	int size = sizeof(tramp_name);
-
-	if (strncmp(tramp_name, name, size) == 0)
+	if (is_kretprobe_trampoline(addr))
 		return "[unknown/kretprobe'd]";
 	return name;
 }
-#else
-static inline const char *kretprobed(const char *name)
-{
-	return name;
-}
-#endif /* CONFIG_KRETPROBES */
 
 void
 trace_seq_print_sym(struct trace_seq *s, unsigned long address, bool offset)
@@ -374,7 +365,7 @@ trace_seq_print_sym(struct trace_seq *s, unsigned long address, bool offset)
 		sprint_symbol(str, address);
 	else
 		kallsyms_lookup(address, NULL, NULL, NULL, str);
-	name = kretprobed(str);
+	name = kretprobed(str, address);
 
 	if (name && strlen(name)) {
 		trace_seq_puts(s, name);
@@ -454,14 +445,18 @@ int trace_print_lat_fmt(struct trace_seq *s, struct trace_entry *entry)
 	char irqs_off;
 	int hardirq;
 	int softirq;
+	int bh_off;
 	int nmi;
 
 	nmi = entry->flags & TRACE_FLAG_NMI;
 	hardirq = entry->flags & TRACE_FLAG_HARDIRQ;
 	softirq = entry->flags & TRACE_FLAG_SOFTIRQ;
+	bh_off = entry->flags & TRACE_FLAG_BH_OFF;
 
 	irqs_off =
+		(entry->flags & TRACE_FLAG_IRQS_OFF && bh_off) ? 'D' :
 		(entry->flags & TRACE_FLAG_IRQS_OFF) ? 'd' :
+		bh_off ? 'b' :
 		(entry->flags & TRACE_FLAG_IRQS_NOSUPPORT) ? 'X' :
 		'.';
 
@@ -492,8 +487,13 @@ int trace_print_lat_fmt(struct trace_seq *s, struct trace_entry *entry)
 	trace_seq_printf(s, "%c%c%c",
 			 irqs_off, need_resched, hardsoft_irq);
 
-	if (entry->preempt_count)
-		trace_seq_printf(s, "%x", entry->preempt_count);
+	if (entry->preempt_count & 0xf)
+		trace_seq_printf(s, "%x", entry->preempt_count & 0xf);
+	else
+		trace_seq_putc(s, '.');
+
+	if (entry->preempt_count & 0xf0)
+		trace_seq_printf(s, "%x", entry->preempt_count >> 4);
 	else
 		trace_seq_putc(s, '.');
 
@@ -656,7 +656,7 @@ int trace_print_lat_context(struct trace_iterator *iter)
 		trace_seq_printf(
 			s, "%16s %7d %3d %d %08x %08lx ",
 			comm, entry->pid, iter->cpu, entry->flags,
-			entry->preempt_count, iter->idx);
+			entry->preempt_count & 0xf, iter->idx);
 	} else {
 		lat_print_generic(s, entry, iter->cpu);
 	}
@@ -688,33 +688,23 @@ struct trace_event *ftrace_find_event(int type)
 	return NULL;
 }
 
-static LIST_HEAD(ftrace_event_list);
+static DEFINE_IDA(trace_event_ida);
 
-static int trace_search_list(struct list_head **list)
+static void free_trace_event_type(int type)
 {
-	struct trace_event *e;
-	int next = __TRACE_LAST_TYPE;
+	if (type >= __TRACE_LAST_TYPE)
+		ida_free(&trace_event_ida, type);
+}
 
-	if (list_empty(&ftrace_event_list)) {
-		*list = &ftrace_event_list;
-		return next;
-	}
+static int alloc_trace_event_type(void)
+{
+	int next;
 
-	/*
-	 * We used up all possible max events,
-	 * lets see if somebody freed one.
-	 */
-	list_for_each_entry(e, &ftrace_event_list, list) {
-		if (e->type != next)
-			break;
-		next++;
-	}
-
-	/* Did we used up all 65 thousand events??? */
-	if (next > TRACE_EVENT_TYPE_MAX)
+	/* Skip static defined type numbers */
+	next = ida_alloc_range(&trace_event_ida, __TRACE_LAST_TYPE,
+			       TRACE_EVENT_TYPE_MAX, GFP_KERNEL);
+	if (next < 0)
 		return 0;
-
-	*list = &e->list;
 	return next;
 }
 
@@ -756,31 +746,12 @@ int register_trace_event(struct trace_event *event)
 	if (WARN_ON(!event->funcs))
 		goto out;
 
-	INIT_LIST_HEAD(&event->list);
-
 	if (!event->type) {
-		struct list_head *list = NULL;
-
-		if (next_event_type > TRACE_EVENT_TYPE_MAX) {
-
-			event->type = trace_search_list(&list);
-			if (!event->type)
-				goto out;
-
-		} else {
-
-			event->type = next_event_type++;
-			list = &ftrace_event_list;
-		}
-
-		if (WARN_ON(ftrace_find_event(event->type)))
+		event->type = alloc_trace_event_type();
+		if (!event->type)
 			goto out;
-
-		list_add_tail(&event->list, list);
-
-	} else if (event->type > __TRACE_LAST_TYPE) {
-		printk(KERN_WARNING "Need to add type to trace.h\n");
-		WARN_ON(1);
+	} else if (WARN(event->type > __TRACE_LAST_TYPE,
+			"Need to add type to trace.h")) {
 		goto out;
 	} else {
 		/* Is this event already used */
@@ -815,7 +786,7 @@ EXPORT_SYMBOL_GPL(register_trace_event);
 int __unregister_trace_event(struct trace_event *event)
 {
 	hlist_del(&event->node);
-	list_del(&event->list);
+	free_trace_event_type(event->type);
 	return 0;
 }
 
@@ -1202,7 +1173,6 @@ trace_hwlat_print(struct trace_iterator *iter, int flags,
 	return trace_handle_return(s);
 }
 
-
 static enum print_line_t
 trace_hwlat_raw(struct trace_iterator *iter, int flags,
 		struct trace_event *event)
@@ -1230,6 +1200,122 @@ static struct trace_event_functions trace_hwlat_funcs = {
 static struct trace_event trace_hwlat_event = {
 	.type		= TRACE_HWLAT,
 	.funcs		= &trace_hwlat_funcs,
+};
+
+/* TRACE_OSNOISE */
+static enum print_line_t
+trace_osnoise_print(struct trace_iterator *iter, int flags,
+		    struct trace_event *event)
+{
+	struct trace_entry *entry = iter->ent;
+	struct trace_seq *s = &iter->seq;
+	struct osnoise_entry *field;
+	u64 ratio, ratio_dec;
+	u64 net_runtime;
+
+	trace_assign_type(field, entry);
+
+	/*
+	 * compute the available % of cpu time.
+	 */
+	net_runtime = field->runtime - field->noise;
+	ratio = net_runtime * 10000000;
+	do_div(ratio, field->runtime);
+	ratio_dec = do_div(ratio, 100000);
+
+	trace_seq_printf(s, "%llu %10llu %3llu.%05llu %7llu",
+			 field->runtime,
+			 field->noise,
+			 ratio, ratio_dec,
+			 field->max_sample);
+
+	trace_seq_printf(s, " %6u", field->hw_count);
+	trace_seq_printf(s, " %6u", field->nmi_count);
+	trace_seq_printf(s, " %6u", field->irq_count);
+	trace_seq_printf(s, " %6u", field->softirq_count);
+	trace_seq_printf(s, " %6u", field->thread_count);
+
+	trace_seq_putc(s, '\n');
+
+	return trace_handle_return(s);
+}
+
+static enum print_line_t
+trace_osnoise_raw(struct trace_iterator *iter, int flags,
+		  struct trace_event *event)
+{
+	struct osnoise_entry *field;
+	struct trace_seq *s = &iter->seq;
+
+	trace_assign_type(field, iter->ent);
+
+	trace_seq_printf(s, "%lld %llu %llu %u %u %u %u %u\n",
+			 field->runtime,
+			 field->noise,
+			 field->max_sample,
+			 field->hw_count,
+			 field->nmi_count,
+			 field->irq_count,
+			 field->softirq_count,
+			 field->thread_count);
+
+	return trace_handle_return(s);
+}
+
+static struct trace_event_functions trace_osnoise_funcs = {
+	.trace		= trace_osnoise_print,
+	.raw		= trace_osnoise_raw,
+};
+
+static struct trace_event trace_osnoise_event = {
+	.type		= TRACE_OSNOISE,
+	.funcs		= &trace_osnoise_funcs,
+};
+
+/* TRACE_TIMERLAT */
+static enum print_line_t
+trace_timerlat_print(struct trace_iterator *iter, int flags,
+		     struct trace_event *event)
+{
+	struct trace_entry *entry = iter->ent;
+	struct trace_seq *s = &iter->seq;
+	struct timerlat_entry *field;
+
+	trace_assign_type(field, entry);
+
+	trace_seq_printf(s, "#%-5u context %6s timer_latency %9llu ns\n",
+			 field->seqnum,
+			 field->context ? "thread" : "irq",
+			 field->timer_latency);
+
+	return trace_handle_return(s);
+}
+
+static enum print_line_t
+trace_timerlat_raw(struct trace_iterator *iter, int flags,
+		   struct trace_event *event)
+{
+	struct timerlat_entry *field;
+	struct trace_seq *s = &iter->seq;
+
+	trace_assign_type(field, iter->ent);
+
+	trace_seq_printf(s, "%u %d %llu\n",
+			 field->seqnum,
+			 field->context,
+			 field->timer_latency);
+
+	return trace_handle_return(s);
+}
+
+static struct trace_event_functions trace_timerlat_funcs = {
+	.trace		= trace_timerlat_print,
+	.raw		= trace_timerlat_raw,
+};
+
+static struct trace_event trace_timerlat_event = {
+	.type		= TRACE_TIMERLAT,
+	.funcs		= &trace_timerlat_funcs,
 };
 
 /* TRACE_BPUTS */
@@ -1442,27 +1528,23 @@ static struct trace_event *events[] __initdata = {
 	&trace_bprint_event,
 	&trace_print_event,
 	&trace_hwlat_event,
+	&trace_osnoise_event,
+	&trace_timerlat_event,
 	&trace_raw_data_event,
 	&trace_func_repeats_event,
 	NULL
 };
 
-__init static int init_events(void)
+__init int init_events(void)
 {
 	struct trace_event *event;
 	int i, ret;
 
 	for (i = 0; events[i]; i++) {
 		event = events[i];
-
 		ret = register_trace_event(event);
-		if (!ret) {
-			printk(KERN_WARNING "event %d failed to register\n",
-			       event->type);
-			WARN_ON_ONCE(1);
-		}
+		WARN_ONCE(!ret, "event %d failed to register", event->type);
 	}
 
 	return 0;
 }
-early_initcall(init_events);

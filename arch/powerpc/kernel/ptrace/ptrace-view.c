@@ -113,8 +113,9 @@ static unsigned long get_user_msr(struct task_struct *task)
 
 static __always_inline int set_user_msr(struct task_struct *task, unsigned long msr)
 {
-	task->thread.regs->msr &= ~MSR_DEBUGCHANGE;
-	task->thread.regs->msr |= msr & MSR_DEBUGCHANGE;
+	unsigned long newmsr = (task->thread.regs->msr & ~MSR_DEBUGCHANGE) |
+				(msr & MSR_DEBUGCHANGE);
+	regs_set_return_msr(task->thread.regs, newmsr);
 	return 0;
 }
 
@@ -173,7 +174,7 @@ int ptrace_get_reg(struct task_struct *task, int regno, unsigned long *data)
 
 	/*
 	 * softe copies paca->irq_soft_mask variable state. Since irq_soft_mask is
-	 * no more used as a flag, lets force usr to alway see the softe value as 1
+	 * no more used as a flag, lets force usr to always see the softe value as 1
 	 * which means interrupts are not soft disabled.
 	 */
 	if (IS_ENABLED(CONFIG_PPC64) && regno == PT_SOFTE) {
@@ -266,9 +267,9 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 					 (PT_MAX_PUT_REG + 1) * sizeof(reg));
 
 	if (PT_MAX_PUT_REG + 1 < PT_TRAP && !ret)
-		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-						(PT_MAX_PUT_REG + 1) * sizeof(reg),
-						PT_TRAP * sizeof(reg));
+		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					  (PT_MAX_PUT_REG + 1) * sizeof(reg),
+					  PT_TRAP * sizeof(reg));
 
 	if (!ret && count > 0) {
 		ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, &reg,
@@ -279,8 +280,8 @@ static int gpr_set(struct task_struct *target, const struct user_regset *regset,
 	}
 
 	if (!ret)
-		ret = user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-						(PT_TRAP + 1) * sizeof(reg), -1);
+		user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+					  (PT_TRAP + 1) * sizeof(reg), -1);
 
 	return ret;
 }
@@ -705,8 +706,9 @@ int gpr32_set_common(struct task_struct *target,
 	ubuf = u;
 	pos *= sizeof(reg);
 	count *= sizeof(reg);
-	return user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
-					 (PT_TRAP + 1) * sizeof(reg), -1);
+	user_regset_copyin_ignore(&pos, &count, &kbuf, &ubuf,
+				  (PT_TRAP + 1) * sizeof(reg), -1);
+	return 0;
 
 Efault:
 	user_read_access_end();
@@ -840,7 +842,7 @@ static const struct user_regset_view user_ppc_compat_view = {
 
 const struct user_regset_view *task_user_regset_view(struct task_struct *task)
 {
-	if (IS_ENABLED(CONFIG_PPC64) && test_tsk_thread_flag(task, TIF_32BIT))
+	if (IS_ENABLED(CONFIG_COMPAT) && is_tsk_32bit_task(task))
 		return &user_ppc_compat_view;
 	return &user_ppc_native_view;
 }

@@ -137,10 +137,9 @@ static irqreturn_t snd_xenon_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void snd_xenon_timer_fn(struct timer_list *t)
+static void snd_xenon_timer_fn(struct timer_list t)
 {
-	struct snd_xenon *chip = from_timer(chip, t, timer);
-	
+	struct snd_xenon *chip = from_timer(chip,t,timer);
 	u32 reg;
 	int rptr_descr, wptr_descr, cur_len, size;
 
@@ -575,9 +574,13 @@ static int snd_xenon_create(struct snd_card *card,
 	snd_card_set_dev(card, &pci->dev);
 
 	*rchip = chip;
-	
+
+	//init_timer(&chip->timer);
+	//chip->timer.function = snd_xenon_timer_fn;
+	//chip->timer.data = (unsigned long)chip;
 	timer_setup(&chip->timer, snd_xenon_timer_fn, 0);
 	chip->timer_in_use = 1;
+	//add_timer(&chip->timer);
 
 	printk("snd_xenon: driver initialized\n");
 
@@ -611,11 +614,6 @@ static int snd_xenon_free(struct snd_xenon *chip)
 	return 0;
 }
 
-static inline int __deprecated snd_card_create(int idx, const char *id, struct module *module, int extra_size, struct snd_card **ret)
-{
-	return snd_card_new(NULL, idx, id, module, extra_size, ret);
-}
-
 static int snd_xenon_probe(struct pci_dev *pci,
 			     const struct pci_device_id *pci_id)
 {
@@ -631,7 +629,7 @@ static int snd_xenon_probe(struct pci_dev *pci,
 		return -ENOENT;
 	}
 
-	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
+	err = snd_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE, 0, &card);
 	if (err < 0)
 		return -ENOMEM;
 
@@ -687,4 +685,3 @@ module_exit(alsa_card_xenon_exit)
 
 MODULE_AUTHOR("jc4360@gmail.com");
 MODULE_DESCRIPTION("Xenon Audio Driver");
-MODULE_LICENSE("GPL");

@@ -4,17 +4,16 @@
 $id: http://devicetree.org/schemas/clock/qcom,gcc-sm8350.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Qualcomm Global Clock & Reset Controller Binding for SM8350
+title: Qualcomm Global Clock & Reset Controller on SM8350
 
 maintainers:
   - Vinod Koul <vkoul@kernel.org>
 
 description: |
-  Qualcomm global clock control module which supports the clocks, resets and
-  power domains on SM8350.
+  Qualcomm global clock control module provides the clocks, resets and power
+  domains on SM8350.
 
-  See also:
-  - dt-bindings/clock/qcom,gcc-sm8350.h
+  See also:: include/dt-bindings/clock/qcom,gcc-sm8350.h
 
 properties:
   compatible:
@@ -36,7 +35,6 @@ properties:
       - description: USB3 phy wrapper pipe clock source (Optional clock)
       - description: USB3 phy sec pipe clock source (Optional clock)
     minItems: 2
-    maxItems: 13
 
   clock-names:
     items:
@@ -54,30 +52,16 @@ properties:
       - const: usb3_phy_wrapper_gcc_usb30_pipe_clk # Optional clock
       - const: usb3_uni_phy_sec_gcc_usb30_pipe_clk # Optional clock
     minItems: 2
-    maxItems: 13
-
-  '#clock-cells':
-    const: 1
-
-  '#reset-cells':
-    const: 1
-
-  '#power-domain-cells':
-    const: 1
-
-  reg:
-    maxItems: 1
 
 required:
   - compatible
   - clocks
   - clock-names
-  - reg
-  - '#clock-cells'
-  - '#reset-cells'
-  - '#power-domain-cells'
 
-additionalProperties: false
+allOf:
+  - $ref: qcom,gcc.yaml#
+
+unevaluatedProperties: false
 
 examples:
   - |

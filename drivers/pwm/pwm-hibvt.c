@@ -128,8 +128,8 @@ static void hibvt_pwm_set_polarity(struct pwm_chip *chip,
 				PWM_POLARITY_MASK, (0x0 << PWM_POLARITY_SHIFT));
 }
 
-static void hibvt_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-				struct pwm_state *state)
+static int hibvt_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+			       struct pwm_state *state)
 {
 	struct hibvt_pwm_chip *hi_pwm_chip = to_hibvt_pwm_chip(chip);
 	void __iomem *base;
@@ -146,6 +146,8 @@ static void hibvt_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 
 	value = readl(base + PWM_CTRL_ADDR(pwm->hwpwm));
 	state->enabled = (PWM_ENABLE_MASK & value);
+
+	return 0;
 }
 
 static int hibvt_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
@@ -206,8 +208,6 @@ static int hibvt_pwm_probe(struct platform_device *pdev)
 	pwm_chip->chip.ops = &hibvt_pwm_ops;
 	pwm_chip->chip.dev = &pdev->dev;
 	pwm_chip->chip.npwm = soc->num_pwms;
-	pwm_chip->chip.of_xlate = of_pwm_xlate_with_flags;
-	pwm_chip->chip.of_pwm_n_cells = 3;
 	pwm_chip->soc = soc;
 
 	pwm_chip->base = devm_platform_ioremap_resource(pdev, 0);
@@ -250,13 +250,15 @@ static int hibvt_pwm_remove(struct platform_device *pdev)
 
 	pwm_chip = platform_get_drvdata(pdev);
 
+	pwmchip_remove(&pwm_chip->chip);
+
 	reset_control_assert(pwm_chip->rstc);
 	msleep(30);
 	reset_control_deassert(pwm_chip->rstc);
 
 	clk_disable_unprepare(pwm_chip->clk);
 
-	return pwmchip_remove(&pwm_chip->chip);
+	return 0;
 }
 
 static const struct of_device_id hibvt_pwm_of_match[] = {

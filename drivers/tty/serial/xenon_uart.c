@@ -153,7 +153,7 @@ static void xenon_break_ctl(struct uart_port *port, int break_state)
 }
 
 static void xenon_set_termios(struct uart_port *port,
-			     struct ktermios *new, struct ktermios *old)
+			     struct ktermios *new, const struct ktermios *old)
 {
 	int baud, quot, cflag = new->c_cflag;
 
@@ -348,7 +348,7 @@ module_exit(xenon_exit);
 
 #ifdef CONFIG_SERIAL_XENON_CONSOLE
 
-static void xenon_console_putchar(struct uart_port *port, int ch)
+static void xenon_console_putchar(struct uart_port *port, unsigned char ch)
 {
 	xenon_putch(port->membase, ch);
 }

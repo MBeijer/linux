@@ -32,7 +32,7 @@
 
 int xenon_smc_message_wait(void *msg);
 
-static unsigned long xenon_get_rtc(void)
+static time64_t xenon_get_rtc(void)
 {
 	unsigned char msg[16] = { 0x04 };
 	unsigned long msec;
@@ -66,14 +66,13 @@ static int xenon_read_time(struct device *dev, struct rtc_time *tm)
 
 static int xenon_set_time(struct device *dev, struct rtc_time *tm)
 {
-	unsigned long time = 0;
-	// int err;
+	time64_t msec;
 
-	time = rtc_tm_to_time64(tm);
-	// if (err)
-	//	return err;
+	msec = rtc_tm_to_time64(tm);
+	if (msec == -1)
+		return msec;
 
-	return xenon_set_rtc(time);
+	return xenon_set_rtc(msec);
 }
 
 static const struct rtc_class_ops xenon_rtc_ops = {
@@ -94,11 +93,26 @@ static int __init xenon_rtc_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int xenon_rtc_unregister(struct rtc_device *rtc) {
+
+	if (rtc->dev.devt)
+		cdev_del(&rtc->char_dev);
+	return 0;
+}
+
 static int __exit xenon_rtc_remove(struct platform_device *pdev)
 {
 	struct rtc_device *rtc = platform_get_drvdata(pdev);
 
-	//devm_rtc_device_unregister(rtc);
+	mutex_lock(&rtc->ops_lock);
+		/* remove innards of this RTC, then disable it, before
+		 * letting any rtc_class_open() users access it again
+		 */
+		xenon_rtc_unregister(rtc);
+		device_unregister(&rtc->dev);
+		rtc->ops = NULL;
+		mutex_unlock(&rtc->ops_lock);
+		put_device(&rtc->dev);
 	return 0;
 }
 

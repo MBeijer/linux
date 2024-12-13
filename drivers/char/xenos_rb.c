@@ -540,7 +540,7 @@ static int xenosrb_wait_gui_idle(unsigned long timeout_jiffies)
 /**
  *	xenosrb_upload_pfp_ucode - Upload and verify Prefetch Parser microcode
  *	@ucode: pointer to microcode buffer
- *  
+ *
  *  Preferably you would call this with interrupts disabled.
  *
  *	Returns 0 on success, or %EIO on verification failure.
@@ -572,7 +572,7 @@ static int xenosrb_upload_pfp_ucode(const uint32_t *ucode, size_t size)
 /**
  *	xenosrb_upload_me_ucode - Upload and verify ME microcode
  *	@ucode: pointer to microcode buffer
- *  
+ *
  *  Preferably you would call this with interrupts disabled.
  *
  *	Returns 0 on success, or %EIO on verification failure.

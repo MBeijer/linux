@@ -60,6 +60,7 @@
  *                          are considered as fatal)
  */
 
+#include <linux/agp_backend.h>
 #include <linux/atomic.h>
 #include <linux/wait.h>
 #include <linux/list.h>
@@ -78,6 +79,7 @@
 #include <drm/ttm/ttm_execbuf_util.h>
 
 #include <drm/drm_gem.h>
+#include <drm/drm_audio_component.h>
 
 #include "radeon_family.h"
 #include "radeon_mode.h"
@@ -115,7 +117,6 @@ extern int radeon_use_pflipirq;
 extern int radeon_bapm;
 extern int radeon_backlight;
 extern int radeon_auxch;
-extern int radeon_mst;
 extern int radeon_uvd;
 extern int radeon_vce;
 extern int radeon_si_support;
@@ -384,7 +385,7 @@ struct radeon_fence {
 };
 
 int radeon_fence_driver_start_ring(struct radeon_device *rdev, int ring);
-int radeon_fence_driver_init(struct radeon_device *rdev);
+void radeon_fence_driver_init(struct radeon_device *rdev);
 void radeon_fence_driver_fini(struct radeon_device *rdev);
 void radeon_fence_driver_force_completion(struct radeon_device *rdev, int ring);
 int radeon_fence_emit(struct radeon_device *rdev, struct radeon_fence **fence, int ring);
@@ -1110,6 +1111,46 @@ typedef int (*radeon_packet0_check_t)(struct radeon_cs_parser *p,
 /*
  * AGP
  */
+
+struct radeon_agp_mode {
+	unsigned long mode;	/**< AGP mode */
+};
+
+struct radeon_agp_info {
+	int agp_version_major;
+	int agp_version_minor;
+	unsigned long mode;
+	unsigned long aperture_base;	/* physical address */
+	unsigned long aperture_size;	/* bytes */
+	unsigned long memory_allowed;	/* bytes */
+	unsigned long memory_used;
+
+	/* PCI information */
+	unsigned short id_vendor;
+	unsigned short id_device;
+};
+
+struct radeon_agp_head {
+	struct agp_kern_info agp_info;
+	struct list_head memory;
+	unsigned long mode;
+	struct agp_bridge_data *bridge;
+	int enabled;
+	int acquired;
+	unsigned long base;
+	int agp_mtrr;
+	int cant_use_aperture;
+	unsigned long page_mask;
+};
+
+#if IS_ENABLED(CONFIG_AGP)
+struct radeon_agp_head *radeon_agp_head_init(struct drm_device *dev);
+#else
+static inline struct radeon_agp_head *radeon_agp_head_init(struct drm_device *dev)
+{
+	return NULL;
+}
+#endif
 int radeon_agp_init(struct radeon_device *rdev);
 void radeon_agp_resume(struct radeon_device *rdev);
 void radeon_agp_suspend(struct radeon_device *rdev);
@@ -1756,6 +1797,9 @@ struct r600_audio {
 	struct radeon_audio_funcs *hdmi_funcs;
 	struct radeon_audio_funcs *dp_funcs;
 	struct radeon_audio_basic_funcs *funcs;
+	struct drm_audio_component *component;
+	bool component_registered;
+	struct mutex component_mutex;
 };
 
 /*
@@ -2303,6 +2347,7 @@ struct radeon_device {
 #ifdef __alpha__
 	struct pci_controller		*hose;
 #endif
+	struct radeon_agp_head		*agp;
 	struct rw_semaphore		exclusive_lock;
 	/* ASIC */
 	union radeon_asic_config	config;
@@ -2420,8 +2465,6 @@ struct radeon_device {
 	struct radeon_vm_manager	vm_manager;
 	struct mutex			gpu_clock_mutex;
 	/* memory stats */
-	atomic64_t			vram_usage;
-	atomic64_t			gtt_usage;
 	atomic64_t			num_bytes_moved;
 	atomic_t			gpu_reset_counter;
 	/* ACPI interface */
@@ -2910,8 +2953,6 @@ struct radeon_hdmi_acr {
 
 };
 
-extern struct radeon_hdmi_acr r600_hdmi_acr(uint32_t clock);
-
 extern u32 r6xx_remap_render_backend(struct radeon_device *rdev,
 				     u32 tiling_pipe_num,
 				     u32 max_rb_num,
@@ -2956,6 +2997,10 @@ void radeon_irq_kms_set_irq_n_enabled(struct radeon_device *rdev,
 				      u32 reg, u32 mask,
 				      bool enable, const char *name,
 				      unsigned n);
+
+/* Audio component binding */
+void radeon_audio_component_init(struct radeon_device *rdev);
+void radeon_audio_component_fini(struct radeon_device *rdev);
 
 #include "radeon_object.h"
 

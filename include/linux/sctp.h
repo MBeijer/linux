@@ -98,6 +98,7 @@ enum sctp_cid {
 	SCTP_CID_I_FWD_TSN		= 0xC2,
 	SCTP_CID_ASCONF_ACK		= 0x80,
 	SCTP_CID_RECONF			= 0x82,
+	SCTP_CID_PAD			= 0x84,
 }; /* enum */
 
 
@@ -407,6 +408,12 @@ struct sctp_heartbeathdr {
 struct sctp_heartbeat_chunk {
 	struct sctp_chunkhdr chunk_hdr;
 	struct sctp_heartbeathdr hb_hdr;
+};
+
+
+/* PAD chunk could be bundled with heartbeat chunk to probe pmtu */
+struct sctp_pad_chunk {
+	struct sctp_chunkhdr uh;
 };
 
 
@@ -812,5 +819,10 @@ struct sctp_new_encap_port_hdr {
 	__be16 cur_port;
 	__be16 new_port;
 };
+
+/* Round an int up to the next multiple of 4.  */
+#define SCTP_PAD4(s) (((s)+3)&~3)
+/* Truncate to the previous multiple of 4.  */
+#define SCTP_TRUNC4(s) ((s)&~3)
 
 #endif /* __LINUX_SCTP_H__ */
