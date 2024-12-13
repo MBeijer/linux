@@ -39,7 +39,7 @@ static struct fb_var_screeninfo xenosfb_defined __initdata = {
     .vmode = FB_VMODE_NONINTERLACED,
 };
 
-static struct fb_fix_screeninfo xenosfb_fix __initdata = {
+static struct fb_fix_screeninfo xenosfb_fix = {
     .id = "XENON FB",
     .type = FB_TYPE_PACKED_PIXELS,
     .accel = FB_ACCEL_NONE,
